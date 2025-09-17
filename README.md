@@ -142,4 +142,5 @@ Override `PORT` if you need a different container port, and mount a volume at `/
 
 ## 10. Continuous Integration
 
-GitHub Actions (`.github/workflows/tests.yml`) runs `python -m pytest` on every push and pull request using Python 3.12. Keep the workflow green before merging changes.
+GitHub Actions (`.github/workflows/tests.yml`) runs `python -m pytest` on every push and pull request using Python 3.12 and then builds the Docker image to probe `/api/health` inside a container. Keep the workflow green before merging changes.
+
