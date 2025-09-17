@@ -4,7 +4,7 @@
 <h1 class="mb-4">Admin Dashboard</h1>
 <div class="row g-4 align-items-stretch">
   <div class="col-lg-4">
-    <div class="card h-100">
+    <div class="card h-100" id="createTaskCard">
       <div class="card-body">
         <h5 class="card-title">Create Task</h5>
         <form action="{{ url_for('create_task') }}" method="post" class="mt-3">
@@ -17,11 +17,75 @@
             <textarea class="form-control" id="description" name="description" rows="4" required></textarea>
           </div>
           <div class="mb-3">
-            <label for="assigned_email" class="form-label">Assigned User Email</label>
-            <input type="email" class="form-control" id="assigned_email" name="assigned_email" required>
+            <label for="assigned_email" class="form-label">Assigned User Emails</label>
+            <textarea
+              class="form-control"
+              id="assigned_email"
+              name="assigned_email"
+              rows="3"
+              placeholder="alice@example.com, bob@example.com"
+            ></textarea>
+            <small class="text-muted">Add one or more emails (comma, semicolon, or new-line separated). Leave blank if using a group.</small>
+          </div>
+          <div class="mb-3">
+            <label for="group_id" class="form-label">Assign Existing Group</label>
+            <select class="form-select" id="group_ids" name="group_ids" multiple size="6">
+              {% if not groups %}
+                <option value="" disabled>(No groups yet)</option>
+              {% else %}
+                {% for group in groups %}
+                  <option value="{{ group.id }}">{{ group.name }} ({{ group.members|length }} member{% if group.members|length != 1 %}s{% endif %})</option>
+                {% endfor %}
+              {% endif %}
+            </select>
+            <div class="d-flex justify-content-between align-items-center mt-1">
+              <small class="text-muted">Hold Cmd/Ctrl to select multiple groups. Leave empty to skip.</small>
+              <button type="button" class="btn btn-sm btn-link p-0" data-clear-groups>Clear</button>
+            </div>
           </div>
           <button type="submit" class="btn btn-primary w-100">Create Task</button>
         </form>
+      </div>
+    </div>
+    <div class="card mt-4 border-primary-subtle">
+      <div class="card-body">
+        <h5 class="card-title">Create User Group</h5>
+        <form action="{{ url_for('create_group') }}" method="post" class="mt-3">
+          <div class="mb-3">
+            <label for="group_name" class="form-label">Group Name</label>
+            <input type="text" class="form-control" id="group_name" name="group_name" placeholder="On-call Team" required>
+          </div>
+          <div class="mb-3">
+            <label for="group_emails" class="form-label">Group Members</label>
+            <textarea class="form-control" id="group_emails" name="group_emails" rows="3" placeholder="alice@example.com\nbob@example.com" required></textarea>
+            <small class="text-muted">Separate emails with commas or new lines.</small>
+          </div>
+          <button type="submit" class="btn btn-outline-primary w-100">Save Group</button>
+        </form>
+        {% if groups %}
+        <div class="mt-4">
+          <h6 class="text-muted text-uppercase">Existing Groups</h6>
+          <ul class="list-group list-group-flush small">
+            {% for group in groups %}
+              <li class="list-group-item px-0">
+                <div class="d-flex justify-content-between align-items-start">
+                  <div>
+                    <strong>{{ group.name }}</strong>
+                    <span class="text-muted">({{ group.members|length }} member{% if group.members|length != 1 %}s{% endif %})</span>
+                    <div class="text-muted">{{ group.members|map(attribute='email')|join(', ') }}</div>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline-secondary ms-2"
+                    data-assign-group="{{ group.id }}"
+                    title="Select this group in the task form"
+                  >Use</button>
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -76,6 +140,7 @@
             <th>Email</th>
             <th>User URL</th>
             <th>Status</th>
+            <th>Share</th>
             <th>Start Time</th>
             <th>Start IP</th>
             <th>End Time</th>
@@ -98,6 +163,16 @@
                 </a>
               </td>
               <td><span class="badge text-bg-primary">{{ task.status }}</span></td>
+              <td>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-secondary copy-link"
+                  data-link="{{ url_for('user_dashboard', email=task.assigned_email, _external=True) }}"
+                  title="Copy user link"
+                >
+                  Copy Link
+                </button>
+              </td>
               <td>{{ task.start_time or '—' }}</td>
               <td>{{ task.start_ip or '—' }}</td>
               <td>{{ task.end_time or '—' }}</td>
@@ -105,7 +180,7 @@
             </tr>
           {% else %}
             <tr>
-              <td colspan="8" class="text-center text-muted">No tasks created yet.</td>
+              <td colspan="9" class="text-center text-muted">No tasks created yet.</td>
             </tr>
           {% endfor %}
         </tbody>

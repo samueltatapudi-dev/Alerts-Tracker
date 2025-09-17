@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
 import pandas as pd
@@ -65,6 +65,25 @@ class Task(db.Model):
         return f'<Task {self.id} {self.title}>'
 
 
+class UserGroup(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), unique=True, nullable=False)
+
+    def __repr__(self) -> str:
+        return f'<UserGroup {self.id} {self.name}>'
+
+
+class GroupMember(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('user_group.id', ondelete='CASCADE'), nullable=False)
+    email = db.Column(db.String(120), nullable=False, index=True)
+
+    group = db.relationship('UserGroup', backref=db.backref('members', cascade='all, delete-orphan', lazy='joined'))
+
+    def __repr__(self) -> str:
+        return f'<GroupMember {self.group_id} {self.email}>'
+
+
 def get_client_ip() -> str:
     header = request.headers.get('X-Forwarded-For', '')
     if header:
@@ -88,6 +107,27 @@ def build_user_url(email: str) -> str:
         scheme = app.config.get('PREFERRED_URL_SCHEME', 'http')
         return f"{scheme}://{server_name.rstrip('/')}/user/{normalized}"
     return f"http://localhost:5000/user/{normalized}"
+
+
+def _normalise_email(value: str) -> str:
+    return value.strip().lower()
+
+
+def parse_email_list(raw_value: Optional[str]) -> List[str]:
+    if not raw_value:
+        return []
+    fragment = raw_value
+    for sep in (',', ';', '\n', '\r'):
+        fragment = fragment.replace(sep, ',')
+    emails: List[str] = []
+    seen: Set[str] = set()
+    for part in fragment.split(','):
+        normalised = _normalise_email(part)
+        if not normalised or normalised in seen:
+            continue
+        emails.append(normalised)
+        seen.add(normalised)
+    return emails
 
 
 def send_task_email(task: Task) -> None:
@@ -302,24 +342,109 @@ def home():
 def admin_dashboard():
     tasks = Task.query.order_by(Task.created_at.desc()).all()
     insights = compute_admin_insights(tasks)
-    return render_template('admin_dashboard.html', tasks=tasks, insights=insights)
+    groups = UserGroup.query.order_by(UserGroup.name.asc()).all()
+    return render_template('admin_dashboard.html', tasks=tasks, insights=insights, groups=groups)
 
 
 @app.route('/admin/create_task', methods=['POST'])
 def create_task():
     title = request.form.get('title', '').strip()
     description = request.form.get('description', '').strip()
-    assigned_email = request.form.get('assigned_email', '').strip().lower()
+    assigned_email_raw = request.form.get('assigned_email', '')
+    group_id_values = [value.strip() for value in request.form.getlist('group_ids') if value.strip()]
 
-    if not title or not description or not assigned_email:
-        flash('All fields are required.', 'danger')
+    if not title or not description:
+        flash('Title and description are required.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
-    task = Task(title=title, description=description, assigned_email=assigned_email, status='Pending')
-    db.session.add(task)
+    direct_emails = parse_email_list(assigned_email_raw)
+    emails: List[str] = list(direct_emails)
+    group_labels: List[str] = []
+    group_email_set: Set[str] = set()
+
+    for value in group_id_values:
+        try:
+            group_id = int(value)
+        except ValueError:
+            flash('Invalid group selection.', 'danger')
+            return redirect(url_for('admin_dashboard'))
+        group = UserGroup.query.get(group_id)
+        if not group:
+            flash('Selected group does not exist.', 'danger')
+            return redirect(url_for('admin_dashboard'))
+        member_emails = [_normalise_email(member.email) for member in group.members if member.email]
+        emails.extend(member_emails)
+        group_email_set.update(member_emails)
+        group_labels.append(group.name)
+
+    emails = list(dict.fromkeys(email for email in emails if email))
+    if not emails:
+        flash('Please enter at least one email or choose a group.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    created_tasks: List[Task] = []
+    for email in emails:
+        task = Task(title=title, description=description, assigned_email=email, status='Pending')
+        db.session.add(task)
+        created_tasks.append(task)
+
     db.session.commit()
-    send_task_email(task)
-    flash('Task created successfully.', 'success')
+
+    for task in created_tasks:
+        send_task_email(task)
+
+    direct_unique = set(direct_emails)
+    overlap = direct_unique & group_email_set
+    direct_only_count = len(direct_unique - overlap)
+
+    if group_labels and direct_only_count:
+        flash(
+            f"Task created for group{'s' if len(group_labels) > 1 else ''} "
+            f"{', '.join(group_labels)} and {direct_only_count} additional email(s).",
+            'success'
+        )
+    elif group_labels:
+        flash(
+            f"Task created for group{'s' if len(group_labels) > 1 else ''} "
+            f"{', '.join(group_labels)} ({len(group_email_set)} member(s)).",
+            'success'
+        )
+    elif len(emails) > 1:
+        flash(f'Task created for {len(emails)} users.', 'success')
+    else:
+        flash('Task created successfully.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/create_group', methods=['POST'])
+def create_group():
+    name = request.form.get('group_name', '').strip()
+    raw_emails = request.form.get('group_emails', '')
+
+    if not name:
+        flash('Group name is required.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    emails = parse_email_list(raw_emails)
+    if not emails:
+        flash('Add at least one valid email address to the group.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    existing = UserGroup.query.filter(db.func.lower(UserGroup.name) == name.lower()).first()
+    if existing:
+        flash('A group with that name already exists.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    group = UserGroup(name=name)
+    db.session.add(group)
+    db.session.flush()
+
+    for email in emails:
+        db.session.add(GroupMember(group_id=group.id, email=email))
+
+    db.session.commit()
+
+    flash(f'Group "{group.name}" created with {len(emails)} member(s).', 'success')
     return redirect(url_for('admin_dashboard'))
 
 

@@ -20,6 +20,11 @@ A Flask dashboard for assigning work, tracking progress, and nudging users with 
    ```
 5. Visit http://127.0.0.1:5000 to open the admin dashboard. Task links now use the configured base URL.
 
+### Working with Groups
+
+- Use the **Create User Group** card on the admin dashboard to name a cohort and paste multiple user emails (comma/new-line separated).
+- When creating a task, paste multiple emails directly or highlight one or more groups in the multiselect (or click **Use** beside a group)—one task per user is generated automatically and each person receives their own email.
+
 ## Email Configuration
 
 The app sends emails via Flask-Mail. Provide SMTP credentials in environment variables or a `.env` file:
@@ -46,6 +51,7 @@ Notes:
 ## Features
 
 - Admin dashboard to create tasks, monitor assignments, and copy shareable user URLs.
+- Group management so you can re-use cohorts of users when creating tasks.
 - Auto-refreshing insights summarizing completion rates, risk levels, and ML clustering.
 - User dashboard with live updates, start/complete actions, and audio alerts for new tasks.
 - REST API (`/api/tasks`, `/api/user/<email>/tasks`) powering the UI and available for integrations.
@@ -56,4 +62,5 @@ Notes:
 - If emails do not arrive, check application logs for "Email delivery failed" warnings.
 - Verify that firewall rules allow outbound SMTP traffic from your environment.
 - When testing in staging environments, set `APP_BASE_URL` to the public URL so links in emails open the correct page.
+- When you add new user groups, restart the app once so SQLAlchemy can create the tables (or delete `instance/tasks.db` to start fresh in dev).
 - Delete `instance/tasks.db` if you want a fresh database (the schema recreates itself on startup).
