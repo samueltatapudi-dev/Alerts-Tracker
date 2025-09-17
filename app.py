@@ -4,11 +4,14 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, url_for, flash
 from flask_mail import Mail, Message
 from flask_sqlalchemy import SQLAlchemy
 from sklearn.cluster import KMeans
 from sklearn.linear_model import LogisticRegression
+
+load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'super-secret-key')
@@ -22,6 +25,8 @@ app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME')
 app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
 app.config['MAIL_SUPPRESS_SEND'] = os.environ.get('MAIL_SUPPRESS_SEND', 'false').lower() == 'true'
 app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_DEFAULT_SENDER', 'no-reply@alerts.local')
+app.config['APP_BASE_URL'] = os.environ.get('APP_BASE_URL')
+app.config['PREFERRED_URL_SCHEME'] = os.environ.get('PREFERRED_URL_SCHEME', 'https')
 
 STATUSES = ('Pending', 'In Progress', 'Completed')
 
@@ -53,6 +58,7 @@ class Task(db.Model):
             'end_time': self.end_time.isoformat() if self.end_time else None,
             'start_ip': self.start_ip,
             'end_ip': self.end_ip,
+            'user_url': build_user_url(self.assigned_email),
         }
 
     def __repr__(self) -> str:
@@ -66,21 +72,41 @@ def get_client_ip() -> str:
     return request.remote_addr or 'unknown'
 
 
+def build_user_url(email: str) -> str:
+    normalized = email.strip().lower()
+    base_url = app.config.get('APP_BASE_URL')
+    if base_url:
+        return f"{base_url.rstrip('/')}/user/{normalized}"
+    try:
+        return url_for('user_dashboard', email=normalized, _external=True)
+    except RuntimeError:
+        root = getattr(request, 'url_root', None)
+        if root:
+            return f"{root.rstrip('/')}/user/{normalized}"
+    server_name = app.config.get('SERVER_NAME')
+    if server_name:
+        scheme = app.config.get('PREFERRED_URL_SCHEME', 'http')
+        return f"{scheme}://{server_name.rstrip('/')}/user/{normalized}"
+    return f"http://localhost:5000/user/{normalized}"
+
+
 def send_task_email(task: Task) -> None:
     if not task.assigned_email:
         return
+    link = build_user_url(task.assigned_email)
     subject = f"New Task Assigned: {task.title}"
     body = (
         f"Hello,\n\n"
         f"You have a new task assigned.\n"
         f"Title: {task.title}\n"
         f"Description: {task.description}\n\n"
-        f"You can work on the task at http://localhost:5000/user/{task.assigned_email}.\n\n"
+        f"You can work on the task at {link}.\n\n"
         f"Best regards,\nAlerts & Tracker"
     )
     try:
         msg = Message(subject=subject, recipients=[task.assigned_email], body=body)
         mail.send(msg)
+        app.logger.info('Queued task email to %s with link %s', task.assigned_email, link)
     except Exception as exc:  # pragma: no cover - log without failing request
         app.logger.warning('Email delivery failed for %s: %s', task.assigned_email, exc)
 

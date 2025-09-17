@@ -19,20 +19,24 @@ const renderAdminTasks = (tasks) => {
   if (!table) return;
   const tbody = table.querySelector('tbody');
   if (!tasks.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No tasks created yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No tasks created yet.</td></tr>';
     return;
   }
-  const rows = tasks.map((task) => `
-    <tr>
-      <td>${task.title}</td>
-      <td>${task.assigned_email}</td>
-      <td><span class="badge text-bg-primary">${task.status}</span></td>
-      <td>${formatDateTime(task.start_time)}</td>
-      <td>${task.start_ip || '—'}</td>
-      <td>${formatDateTime(task.end_time)}</td>
-      <td>${task.end_ip || '—'}</td>
-    </tr>
-  `);
+  const rows = tasks.map((task) => {
+    const userUrl = task.user_url || `${window.location.origin}/user/${encodeURIComponent(task.assigned_email)}`;
+    return `
+      <tr>
+        <td>${task.title}</td>
+        <td>${task.assigned_email}</td>
+        <td><a class="link-secondary small" href="${userUrl}" target="_blank" rel="noopener">${userUrl}</a></td>
+        <td><span class="badge text-bg-primary">${task.status}</span></td>
+        <td>${formatDateTime(task.start_time)}</td>
+        <td>${task.start_ip || '—'}</td>
+        <td>${formatDateTime(task.end_time)}</td>
+        <td>${task.end_ip || '—'}</td>
+      </tr>
+    `;
+  });
   tbody.innerHTML = rows.join('');
 };
 
