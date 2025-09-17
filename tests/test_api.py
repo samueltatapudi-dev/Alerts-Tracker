@@ -9,7 +9,23 @@ def test_health_check(client):
     assert response.get_json() == {"status": "ok"}
 
 
-def test_api_tasks_returns_tasks_and_insights(client, test_app, make_task):
+def test_admin_dashboard_requires_auth(client):
+    response = client.get("/admin")
+    assert response.status_code == 401
+    assert 'WWW-Authenticate' in response.headers
+
+
+def test_admin_dashboard_with_auth(client, admin_headers):
+    response = client.get("/admin", headers=admin_headers)
+    assert response.status_code == 200
+
+
+def test_api_tasks_requires_auth(client):
+    response = client.get("/api/tasks")
+    assert response.status_code == 401
+
+
+def test_api_tasks_returns_tasks_and_insights(client, test_app, make_task, admin_headers):
     now = datetime.utcnow()
     make_task(
         assigned_email="alice@example.com",
@@ -29,7 +45,7 @@ def test_api_tasks_returns_tasks_and_insights(client, test_app, make_task):
         created_at=now - timedelta(hours=1),
     )
 
-    response = client.get("/api/tasks")
+    response = client.get("/api/tasks", headers=admin_headers)
     assert response.status_code == 200
     payload = response.get_json()
     assert len(payload["tasks"]) == 3
@@ -43,14 +59,23 @@ def test_api_tasks_returns_tasks_and_insights(client, test_app, make_task):
         "alice@example.com",
         "bob@example.com",
     }
+    assert all("user_token" in task for task in payload["tasks"])
+
+
+def test_api_user_tasks_requires_token(client, make_task):
+    make_task(assigned_email="user@example.com")
+    response = client.get("/api/user/user@example.com/tasks")
+    assert response.status_code == 401
 
 
 def test_api_user_tasks_filters_by_email(client, make_task):
     now = datetime.utcnow()
-    make_task(assigned_email="user@example.com", created_at=now - timedelta(hours=1))
+    user_task = make_task(assigned_email="user@example.com", created_at=now - timedelta(hours=1))
     make_task(assigned_email="other@example.com", created_at=now - timedelta(hours=2))
 
-    response = client.get("/api/user/user@example.com/tasks")
+    response = client.get(
+        f"/api/user/user@example.com/tasks?token={user_task.user_token}"
+    )
     assert response.status_code == 200
     payload = response.get_json()
     assert len(payload["tasks"]) == 1
@@ -58,10 +83,19 @@ def test_api_user_tasks_filters_by_email(client, make_task):
     assert payload["summary"]["tasks_pending"] == 1
 
 
+def test_api_start_task_requires_token(client, make_task):
+    task = make_task(status="Pending")
+    response = client.post(f"/api/tasks/{task.id}/start")
+    assert response.status_code == 401
+
+
 def test_api_start_task_transitions_status(client, test_app, make_task):
     task = make_task(status="Pending")
 
-    response = client.post(f"/api/tasks/{task.id}/start")
+    response = client.post(
+        f"/api/tasks/{task.id}/start",
+        json={"token": task.user_token},
+    )
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["task"]["status"] == "In Progress"
@@ -74,10 +108,19 @@ def test_api_start_task_transitions_status(client, test_app, make_task):
         assert persisted.start_ip == "127.0.0.1"
 
 
+def test_api_complete_task_requires_token(client, make_task):
+    task = make_task(status="Pending")
+    response = client.post(f"/api/tasks/{task.id}/complete")
+    assert response.status_code == 401
+
+
 def test_api_complete_task_marks_finished(client, test_app, make_task):
     task = make_task(status="Pending")
 
-    response = client.post(f"/api/tasks/{task.id}/complete")
+    response = client.post(
+        f"/api/tasks/{task.id}/complete",
+        json={"token": task.user_token},
+    )
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["task"]["status"] == "Completed"
@@ -90,3 +133,14 @@ def test_api_complete_task_marks_finished(client, test_app, make_task):
         assert persisted.end_ip == "127.0.0.1"
         assert persisted.start_time is not None
         assert persisted.start_ip == "127.0.0.1"
+
+
+def test_user_dashboard_requires_valid_token(client):
+    response = client.get("/user/test@example.com")
+    assert response.status_code == 403
+
+
+def test_user_dashboard_allows_valid_token(client, make_task):
+    task = make_task(assigned_email="user@example.com")
+    response = client.get(f"/user/user@example.com?token={task.user_token}")
+    assert response.status_code == 200

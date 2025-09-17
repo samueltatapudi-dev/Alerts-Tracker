@@ -1,20 +1,26 @@
 import os
+import hmac
+from functools import wraps
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template, request, url_for, flash
+from flask import Flask, abort, jsonify, redirect, render_template, request, url_for, flash, Response
 from flask_mail import Mail, Message
 from flask_sqlalchemy import SQLAlchemy
 from sklearn.cluster import KMeans
 from sklearn.linear_model import LogisticRegression
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 load_dotenv()
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'super-secret-key')
+secret_key = os.environ.get('SECRET_KEY')
+if not secret_key:
+    raise RuntimeError('SECRET_KEY environment variable must be set before starting the application.')
+app.config['SECRET_KEY'] = secret_key
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///tasks.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'localhost')
@@ -27,12 +33,64 @@ app.config['MAIL_SUPPRESS_SEND'] = os.environ.get('MAIL_SUPPRESS_SEND', 'false')
 app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_DEFAULT_SENDER', 'no-reply@alerts.local')
 app.config['APP_BASE_URL'] = os.environ.get('APP_BASE_URL')
 app.config['PREFERRED_URL_SCHEME'] = os.environ.get('PREFERRED_URL_SCHEME', 'https')
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
+if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+    raise RuntimeError('ADMIN_USERNAME and ADMIN_PASSWORD must be provided for admin authentication.')
+app.config['ADMIN_USERNAME'] = ADMIN_USERNAME
+app.config['ADMIN_PASSWORD'] = ADMIN_PASSWORD
+app.config['USER_TOKEN_MAX_AGE'] = int(os.environ.get('USER_TOKEN_MAX_AGE', 60 * 60 * 24 * 30))
+app.config['MAX_TASK_RECIPIENTS'] = int(os.environ.get('MAX_TASK_RECIPIENTS', 100))
+app.config['MAX_GROUP_MEMBERS'] = int(os.environ.get('MAX_GROUP_MEMBERS', 100))
+app.config['MAX_FORM_BYTES'] = int(os.environ.get('MAX_FORM_BYTES', 20000))
+app.config['MAX_EMAIL_LENGTH'] = int(os.environ.get('MAX_EMAIL_LENGTH', 320))
+app.config['ADMIN_INSIGHTS_CACHE_SECONDS'] = int(os.environ.get('ADMIN_INSIGHTS_CACHE_SECONDS', 30))
 
 STATUSES = ('Pending', 'In Progress', 'Completed')
 
 db = SQLAlchemy(app)
-mail = Mail(app)
+serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='alerts-tracker')
 
+def _admin_auth_response():
+    response = Response('Authentication required.', 401)
+    response.headers['WWW-Authenticate'] = 'Basic realm="AlertsTracker Admin"'
+    return response
+
+def _is_admin_authorized() -> bool:
+    auth = request.authorization
+    expected_username = app.config['ADMIN_USERNAME']
+    expected_password = app.config['ADMIN_PASSWORD']
+    if not auth or not expected_username or not expected_password:
+        return False
+    return hmac.compare_digest(auth.username, expected_username) and hmac.compare_digest(auth.password, expected_password)
+
+def admin_required(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if not _is_admin_authorized():
+            return _admin_auth_response()
+        return func(*args, **kwargs)
+    return wrapper
+
+def generate_user_token(email: str) -> str:
+    normalized = _normalise_email(email)
+    return serializer.dumps({'email': normalized})
+
+def verify_user_token(email: str, token: str) -> bool:
+    if not token:
+        return False
+    normalized = _normalise_email(email)
+    try:
+        data = serializer.loads(token, max_age=app.config['USER_TOKEN_MAX_AGE'])
+    except (BadSignature, SignatureExpired):
+        return False
+    return data.get('email') == normalized
+
+INSIGHTS_CACHE = {'timestamp': 0.0, 'payload': None}
+
+def invalidate_insights_cache() -> None:
+    INSIGHTS_CACHE['timestamp'] = 0.0
+    INSIGHTS_CACHE['payload'] = None
 
 class Task(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -58,11 +116,20 @@ class Task(db.Model):
             'end_time': self.end_time.isoformat() if self.end_time else None,
             'start_ip': self.start_ip,
             'end_ip': self.end_ip,
-            'user_url': build_user_url(self.assigned_email),
+            'user_url': self.user_url,
+            'user_token': self.user_token,
         }
 
     def __repr__(self) -> str:
         return f'<Task {self.id} {self.title}>'
+
+    @property
+    def user_token(self) -> str:
+        return generate_user_token(self.assigned_email)
+
+    @property
+    def user_url(self) -> str:
+        return build_user_url(self.assigned_email)
 
 
 class UserGroup(db.Model):
@@ -92,21 +159,27 @@ def get_client_ip() -> str:
 
 
 def build_user_url(email: str) -> str:
-    normalized = email.strip().lower()
+    normalized = _normalise_email(email)
     base_url = app.config.get('APP_BASE_URL')
     if base_url:
-        return f"{base_url.rstrip('/')}/user/{normalized}"
-    try:
-        return url_for('user_dashboard', email=normalized, _external=True)
-    except RuntimeError:
-        root = getattr(request, 'url_root', None)
-        if root:
-            return f"{root.rstrip('/')}/user/{normalized}"
-    server_name = app.config.get('SERVER_NAME')
-    if server_name:
-        scheme = app.config.get('PREFERRED_URL_SCHEME', 'http')
-        return f"{scheme}://{server_name.rstrip('/')}/user/{normalized}"
-    return f"http://localhost:5000/user/{normalized}"
+        base = f"{base_url.rstrip('/')}/user/{normalized}"
+    else:
+        try:
+            base = url_for('user_dashboard', email=normalized, _external=True)
+        except RuntimeError:
+            root = getattr(request, 'url_root', None)
+            if root:
+                base = f"{root.rstrip('/')}/user/{normalized}"
+            else:
+                server_name = app.config.get('SERVER_NAME')
+                if server_name:
+                    scheme = app.config.get('PREFERRED_URL_SCHEME', 'http')
+                    base = f"{scheme}://{server_name.rstrip('/')}/user/{normalized}"
+                else:
+                    base = f"http://localhost:5000/user/{normalized}"
+    token = generate_user_token(normalized)
+    separator = '&' if '?' in base else '?'
+    return f"{base}{separator}token={token}"
 
 
 def _normalise_email(value: str) -> str:
@@ -121,9 +194,12 @@ def parse_email_list(raw_value: Optional[str]) -> List[str]:
         fragment = fragment.replace(sep, ',')
     emails: List[str] = []
     seen: Set[str] = set()
+    max_length = app.config.get('MAX_EMAIL_LENGTH', 320)
     for part in fragment.split(','):
         normalised = _normalise_email(part)
         if not normalised or normalised in seen:
+            continue
+        if max_length and len(normalised) > max_length:
             continue
         emails.append(normalised)
         seen.add(normalised)
@@ -227,6 +303,13 @@ def _cluster_users(user_feature_rows: List[Dict[str, Any]]) -> Dict[str, str]:
 
 
 def compute_admin_insights(tasks: List[Task]) -> Dict[str, object]:
+    cache_seconds = app.config.get('ADMIN_INSIGHTS_CACHE_SECONDS', 0)
+    use_cache = bool(cache_seconds) and not app.testing
+    if use_cache:
+        cached_payload = INSIGHTS_CACHE.get('payload')
+        cached_ts = INSIGHTS_CACHE.get('timestamp', 0.0)
+        if cached_payload is not None and (datetime.utcnow().timestamp() - cached_ts) < cache_seconds:
+            return copy.deepcopy(cached_payload)
     df = _build_dataframe(tasks)
     metrics = {
         'user_metrics': [],
@@ -293,6 +376,9 @@ def compute_admin_insights(tasks: List[Task]) -> Dict[str, object]:
 
     metrics['user_metrics'].sort(key=lambda item: item['risk_score'], reverse=True)
     metrics['at_risk_users'] = [item['assigned_email'] for item in metrics['user_metrics'] if item['at_risk']]
+    if use_cache:
+        INSIGHTS_CACHE['payload'] = copy.deepcopy(metrics)
+        INSIGHTS_CACHE['timestamp'] = datetime.utcnow().timestamp()
     return metrics
 
 
@@ -339,6 +425,7 @@ def home():
 
 
 @app.route('/admin', methods=['GET'])
+@admin_required
 def admin_dashboard():
     tasks = Task.query.order_by(Task.created_at.desc()).all()
     insights = compute_admin_insights(tasks)
@@ -347,7 +434,13 @@ def admin_dashboard():
 
 
 @app.route('/admin/create_task', methods=['POST'])
+@admin_required
 def create_task():
+    max_bytes = app.config.get('MAX_FORM_BYTES')
+    if request.content_length and max_bytes and request.content_length > max_bytes:
+        flash('Request payload is too large to process.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
     title = request.form.get('title', '').strip()
     description = request.form.get('description', '').strip()
     assigned_email_raw = request.form.get('assigned_email', '')
@@ -382,13 +475,26 @@ def create_task():
         flash('Please enter at least one email or choose a group.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
+    max_recipients = app.config.get('MAX_TASK_RECIPIENTS')
+    if max_recipients and len(emails) > max_recipients:
+        flash(f'Too many recipients. Limit per task is {max_recipients}.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
     created_tasks: List[Task] = []
     for email in emails:
         task = Task(title=title, description=description, assigned_email=email, status='Pending')
         db.session.add(task)
         created_tasks.append(task)
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.exception('Failed to create tasks: %s', exc)
+        flash('Unable to create tasks at this time. Please try again.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    invalidate_insights_cache()
 
     for task in created_tasks:
         send_task_email(task)
@@ -417,7 +523,13 @@ def create_task():
 
 
 @app.route('/admin/create_group', methods=['POST'])
+@admin_required
 def create_group():
+    max_bytes = app.config.get('MAX_FORM_BYTES')
+    if request.content_length and max_bytes and request.content_length > max_bytes:
+        flash('Request payload is too large to process.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
     name = request.form.get('group_name', '').strip()
     raw_emails = request.form.get('group_emails', '')
 
@@ -430,6 +542,11 @@ def create_group():
         flash('Add at least one valid email address to the group.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
+    max_members = app.config.get('MAX_GROUP_MEMBERS')
+    if max_members and len(emails) > max_members:
+        flash(f'Too many members. Limit per group is {max_members}.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
     existing = UserGroup.query.filter(db.func.lower(UserGroup.name) == name.lower()).first()
     if existing:
         flash('A group with that name already exists.', 'danger')
@@ -437,12 +554,17 @@ def create_group():
 
     group = UserGroup(name=name)
     db.session.add(group)
-    db.session.flush()
 
-    for email in emails:
-        db.session.add(GroupMember(group_id=group.id, email=email))
-
-    db.session.commit()
+    try:
+        db.session.flush()
+        for email in emails:
+            db.session.add(GroupMember(group_id=group.id, email=email))
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.exception('Failed to create group: %s', exc)
+        flash('Unable to create the group. Please try again.', 'danger')
+        return redirect(url_for('admin_dashboard'))
 
     flash(f'Group "{group.name}" created with {len(emails)} member(s).', 'success')
     return redirect(url_for('admin_dashboard'))
@@ -451,10 +573,14 @@ def create_group():
 @app.route('/user/<path:email>', methods=['GET'])
 def user_dashboard(email: str):
     normalized = email.strip().lower()
-    return render_template('user_dashboard.html', email=normalized)
+    token = request.args.get('token', '')
+    if not verify_user_token(normalized, token):
+        abort(403)
+    return render_template('user_dashboard.html', email=normalized, user_token=token)
 
 
 @app.route('/api/tasks', methods=['GET'])
+@admin_required
 def api_tasks():
     tasks = Task.query.order_by(Task.created_at.desc()).all()
     insights = compute_admin_insights(tasks)
@@ -467,28 +593,41 @@ def api_tasks():
 @app.route('/api/user/<path:email>/tasks', methods=['GET'])
 def api_user_tasks(email: str):
     normalized = email.strip().lower()
+    token = request.args.get('token', '')
+    if not verify_user_token(normalized, token):
+        abort(401)
     tasks = Task.query.filter_by(assigned_email=normalized).order_by(Task.created_at.desc()).all()
     summary = _summarise_user(tasks)
-    return jsonify({
+    response_payload = {
         'tasks': [task.to_dict() for task in tasks],
         'summary': summary,
-    })
+    }
+    return jsonify(response_payload)
 
 
 @app.route('/api/tasks/<int:task_id>/start', methods=['POST'])
 def api_start_task(task_id: int):
     task = Task.query.get_or_404(task_id)
+    payload = request.get_json(silent=True) or {}
+    token = payload.get('token') or request.args.get('token', '')
+    if not verify_user_token(task.assigned_email, token):
+        return jsonify({'error': 'Unauthorized'}), 401
     if not task.start_time:
         task.start_time = datetime.utcnow()
         task.start_ip = get_client_ip()
     task.status = 'In Progress'
     db.session.commit()
+    invalidate_insights_cache()
     return jsonify({'message': 'Task started', 'task': task.to_dict()})
 
 
 @app.route('/api/tasks/<int:task_id>/complete', methods=['POST'])
 def api_complete_task(task_id: int):
     task = Task.query.get_or_404(task_id)
+    payload = request.get_json(silent=True) or {}
+    token = payload.get('token') or request.args.get('token', '')
+    if not verify_user_token(task.assigned_email, token):
+        return jsonify({'error': 'Unauthorized'}), 401
     task.status = 'Completed'
     if not task.start_time:
         task.start_time = datetime.utcnow()
@@ -496,6 +635,7 @@ def api_complete_task(task_id: int):
     task.end_time = datetime.utcnow()
     task.end_ip = get_client_ip()
     db.session.commit()
+    invalidate_insights_cache()
     return jsonify({'message': 'Task completed', 'task': task.to_dict()})
 
 

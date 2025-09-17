@@ -154,12 +154,12 @@
               <td>{{ task.assigned_email }}</td>
               <td>
                 <a
-                  href="{{ url_for('user_dashboard', email=task.assigned_email, _external=True) }}"
+                  href="{{ task.user_url }}"
                   class="link-secondary small"
                   target="_blank"
                   rel="noopener"
                 >
-                  {{ url_for('user_dashboard', email=task.assigned_email, _external=True) }}
+                  {{ task.user_url }}
                 </a>
               </td>
               <td><span class="badge text-bg-primary">{{ task.status }}</span></td>
@@ -167,7 +167,7 @@
                 <button
                   type="button"
                   class="btn btn-sm btn-outline-secondary copy-link"
-                  data-link="{{ url_for('user_dashboard', email=task.assigned_email, _external=True) }}"
+                  data-link="{{ task.user_url }}"
                   title="Copy user link"
                 >
                   Copy Link

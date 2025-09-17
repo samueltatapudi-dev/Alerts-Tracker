@@ -11,6 +11,7 @@ RUN python -m pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt gunicorn
 
 COPY . .
+RUN chmod +x docker-entrypoint.sh
 
 EXPOSE 5000
-CMD ["sh", "-c", "python -c \"from pathlib import Path; Path('instance').mkdir(exist_ok=True); from app import app, db; ctx = app.app_context(); ctx.push(); db.create_all()\" && exec gunicorn --bind 0.0.0.0:${PORT:-5000} app:app"]
+ENTRYPOINT ["./docker-entrypoint.sh"]

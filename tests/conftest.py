@@ -1,7 +1,19 @@
-import pytest
+import base64
+import os
 from datetime import datetime
 
-from app import app, db, Task
+import pytest
+
+os.environ.setdefault('SECRET_KEY', 'test-secret')
+os.environ.setdefault('ADMIN_USERNAME', 'admin')
+os.environ.setdefault('ADMIN_PASSWORD', 'password')
+
+from app import app, db, Task, generate_user_token, invalidate_insights_cache  # noqa: E402
+
+
+def _basic_auth_header(username: str, password: str) -> dict:
+    token = base64.b64encode(f"{username}:{password}".encode('utf-8')).decode('utf-8')
+    return {'Authorization': f'Basic {token}'}
 
 
 @pytest.fixture
@@ -12,14 +24,17 @@ def test_app(tmp_path):
         SQLALCHEMY_DATABASE_URI=f"sqlite:///{db_path}",
         WTF_CSRF_ENABLED=False,
         MAIL_SUPPRESS_SEND=True,
+        ADMIN_INSIGHTS_CACHE_SECONDS=0,
     )
     with app.app_context():
         db.session.remove()
         db.drop_all()
         db.create_all()
+        invalidate_insights_cache()
         yield app
         db.session.remove()
         db.drop_all()
+        invalidate_insights_cache()
 
 
 @pytest.fixture
@@ -31,6 +46,11 @@ def client(test_app):
 def app_context(test_app):
     with test_app.app_context():
         yield
+
+
+@pytest.fixture
+def admin_headers(test_app):
+    return _basic_auth_header(test_app.config['ADMIN_USERNAME'], test_app.config['ADMIN_PASSWORD'])
 
 
 @pytest.fixture
@@ -54,6 +74,14 @@ def make_task(test_app):
             db.session.add(task)
             db.session.commit()
             db.session.refresh(task)
+            invalidate_insights_cache()
             return task
 
     return _create
+
+
+@pytest.fixture
+def user_token():
+    def _token(email: str) -> str:
+        return generate_user_token(email)
+    return _token

@@ -6,7 +6,11 @@ const formatDateTime = (isoString) => {
 };
 
 const fetchJSON = async (url, options = {}) => {
-  const response = await fetch(url, options);
+  const finalOptions = {
+    credentials: 'include',
+    ...options,
+  };
+  const response = await fetch(url, finalOptions);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || 'Request failed');
@@ -272,16 +276,24 @@ const updateReminder = (hasOpenTask, audioEl) => {
   }
 };
 
-const initUserDashboard = (email) => {
+const initUserDashboard = (email, token) => {
   const table = document.getElementById('userTasksTable');
   if (!table) return;
+  if (!token) {
+    console.error('User access token missing.');
+    return;
+  }
   const audioEl = document.getElementById('newTaskAudio');
   const knownTaskIds = new Set();
   clearReminderTimer();
 
   const handleAction = async (taskId, action) => {
     try {
-      await fetchJSON(`/api/tasks/${taskId}/${action}`, { method: 'POST' });
+      await fetchJSON(`/api/tasks/${taskId}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
       await poll();
     } catch (error) {
       console.error(`Failed to ${action} task`, error);
@@ -303,7 +315,7 @@ const initUserDashboard = (email) => {
 
   const poll = async () => {
     try {
-      const data = await fetchJSON(`/api/user/${encodeURIComponent(email)}/tasks`);
+      const data = await fetchJSON(`/api/user/${encodeURIComponent(email)}/tasks?token=${encodeURIComponent(token)}`);
       const { hasOpenTask } = renderUserTasks(table, data.tasks, knownTaskIds, audioEl, { suppressAudio: isInitialRender });
       renderUserSummary(data.summary);
       updateReminder(hasOpenTask, audioEl);

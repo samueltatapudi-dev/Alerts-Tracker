@@ -30,6 +30,13 @@ python app.py
 
 The server listens on http://127.0.0.1:5000 with `debug=True`. The first start creates `instance/tasks.db` and the new `user_group` tables automatically.
 
+### Authentication & Security
+
+- Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in `.env`; the admin dashboard and write APIs challenge with HTTP Basic auth using these credentials.
+- `SECRET_KEY` is mandatory. The app refuses to boot if it is not provided.
+- User dashboards now require signed tokens. Always share the complete link generated in the admin UI -- removing the `token` query parameter will return HTTP 403.
+- Task and status updates sent from the user dashboard include the same token; disabling or altering it will block updates.
+
 ### SMTP Quick Options
 
 | Scenario | Settings |
@@ -92,6 +99,8 @@ PREFERRED_URL_SCHEME=https
 
 Responses are JSON; all task payloads include `user_url` for direct linking.
 
+> Security: `/api/tasks` requires HTTP Basic auth. `/api/user/<email>/tasks`, `/api/tasks/<id>/start`, and `/api/tasks/<id>/complete` require a valid `token` query/body parameter issued in the user link.
+
 ## 5. Development Notes
 
 - Database lives under `instance/`; delete `instance/tasks.db` for a clean slate (recreated on launch).
@@ -123,6 +132,9 @@ Happy hacking!
 Run the pytest suite to exercise the API endpoints and data helpers. Install pytest inside your virtualenv, then execute the suite from the project root.
 
 ```bash
+export SECRET_KEY=test-secret
+export ADMIN_USERNAME=admin
+export ADMIN_PASSWORD=change-me
 pip install pytest
 python -m pytest
 ```
@@ -135,12 +147,12 @@ A container recipe lives in the project root. Build and run it to host the app b
 
 ```bash
 docker build -t alerts-tracker .
-docker run --rm -p 5000:5000 --env-file .env alerts-tracker
+docker run --rm \n  -p 5000:5000 \n  -e SECRET_KEY=change-me \n  -e ADMIN_USERNAME=admin \n  -e ADMIN_PASSWORD=change-me \n  -e MAIL_SUPPRESS_SEND=true \n  alerts-tracker
 ```
 
-Override `PORT` if you need a different container port, and mount a volume at `/app/instance` if you want task data to persist between runs.
+Override `PORT` if you need a different container port, and mount a volume at `/app/instance` if you want task data to persist between runs. Provide the same environment variables in production (or mount an `.env` file) so authentication works as expected.
 
 ## 10. Continuous Integration
 
-GitHub Actions (`.github/workflows/tests.yml`) runs `python -m pytest` on every push and pull request using Python 3.12 and then builds the Docker image to probe `/api/health` inside a container. Keep the workflow green before merging changes.
+GitHub Actions (`.github/workflows/tests.yml`) runs `python -m pytest` on every push and pull request using Python 3.12 with the required secrets set, then builds the Docker image to probe `/api/health` inside a container. Keep the workflow green before merging changes.
 

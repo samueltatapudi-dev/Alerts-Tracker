@@ -61,7 +61,7 @@
 {% block scripts %}
 <script>
   document.addEventListener('DOMContentLoaded', () => {
-    initUserDashboard('{{ email }}');
+    initUserDashboard({{ email|tojson }}, {{ user_token|tojson }});
   });
 </script>
 {% endblock %}

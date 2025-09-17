@@ -11,6 +11,11 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    env:
+      SECRET_KEY: test-secret
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: changeme
+      MAIL_SUPPRESS_SEND: 'true'
 
     steps:
       - name: Check out repository
@@ -46,6 +51,8 @@ jobs:
         run: |
           docker run -d --name alerts-tracker \
             -e SECRET_KEY=test-secret \
+            -e ADMIN_USERNAME=admin \
+            -e ADMIN_PASSWORD=changeme \
             -e MAIL_SUPPRESS_SEND=true \
             -p 5000:5000 \
             alerts-tracker
