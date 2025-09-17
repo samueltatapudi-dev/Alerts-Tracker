@@ -1,8 +1,9 @@
 import os
+import copy
 import hmac
 from functools import wraps
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -32,6 +33,7 @@ app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
 app.config['MAIL_SUPPRESS_SEND'] = os.environ.get('MAIL_SUPPRESS_SEND', 'false').lower() == 'true'
 app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_DEFAULT_SENDER', 'no-reply@alerts.local')
 app.config['APP_BASE_URL'] = os.environ.get('APP_BASE_URL')
+DEFAULT_MAIL_SENDER = app.config['MAIL_DEFAULT_SENDER']
 app.config['PREFERRED_URL_SCHEME'] = os.environ.get('PREFERRED_URL_SCHEME', 'https')
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
@@ -76,15 +78,39 @@ def generate_user_token(email: str) -> str:
     normalized = _normalise_email(email)
     return serializer.dumps({'email': normalized})
 
-def verify_user_token(email: str, token: str) -> bool:
-    if not token:
-        return False
-    normalized = _normalise_email(email)
-    try:
-        data = serializer.loads(token, max_age=app.config['USER_TOKEN_MAX_AGE'])
-    except (BadSignature, SignatureExpired):
-        return False
-    return data.get('email') == normalized
+
+def ensure_email_settings() -> 'EmailSettings':
+    settings = EmailSettings.query.get(1)
+    if settings:
+        return settings
+    settings = EmailSettings(
+        id=1,
+        mail_server=app.config['MAIL_SERVER'],
+        mail_port=app.config['MAIL_PORT'],
+        use_tls=app.config['MAIL_USE_TLS'],
+        use_ssl=app.config['MAIL_USE_SSL'],
+        username=app.config['MAIL_USERNAME'],
+        password=app.config['MAIL_PASSWORD'],
+        default_sender=app.config.get('MAIL_DEFAULT_SENDER', DEFAULT_MAIL_SENDER),
+        suppress_send=app.config['MAIL_SUPPRESS_SEND'],
+    )
+    db.session.add(settings)
+    db.session.commit()
+    return settings
+
+
+def apply_email_settings(settings: 'EmailSettings') -> None:
+    app.config['MAIL_SERVER'] = settings.mail_server
+    app.config['MAIL_PORT'] = settings.mail_port
+    app.config['MAIL_USE_TLS'] = settings.use_tls
+    app.config['MAIL_USE_SSL'] = settings.use_ssl
+    app.config['MAIL_USERNAME'] = settings.username
+    app.config['MAIL_PASSWORD'] = settings.password
+    sender = settings.default_sender or DEFAULT_MAIL_SENDER
+    app.config['MAIL_DEFAULT_SENDER'] = sender
+    app.config['MAIL_SUPPRESS_SEND'] = settings.suppress_send
+    mail.init_app(app)
+
 
 INSIGHTS_CACHE = {'timestamp': 0.0, 'payload': None}
 
@@ -151,6 +177,23 @@ class GroupMember(db.Model):
         return f'<GroupMember {self.group_id} {self.email}>'
 
 
+
+class EmailSettings(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    mail_server = db.Column(db.String(255), nullable=False, default='localhost')
+    mail_port = db.Column(db.Integer, nullable=False, default=25)
+    use_tls = db.Column(db.Boolean, nullable=False, default=False)
+    use_ssl = db.Column(db.Boolean, nullable=False, default=False)
+    username = db.Column(db.String(255), nullable=True)
+    password = db.Column(db.String(255), nullable=True)
+    default_sender = db.Column(db.String(255), nullable=True)
+    suppress_send = db.Column(db.Boolean, nullable=False, default=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<EmailSettings {self.id}>"
+
+
 def get_client_ip() -> str:
     header = request.headers.get('X-Forwarded-For', '')
     if header:
@@ -209,6 +252,8 @@ def parse_email_list(raw_value: Optional[str]) -> List[str]:
 def send_task_email(task: Task) -> None:
     if not task.assigned_email:
         return
+    settings = ensure_email_settings()
+    apply_email_settings(settings)
     link = build_user_url(task.assigned_email)
     subject = f"New Task Assigned: {task.title}"
     body = (
@@ -223,8 +268,10 @@ def send_task_email(task: Task) -> None:
         msg = Message(subject=subject, recipients=[task.assigned_email], body=body)
         mail.send(msg)
         app.logger.info('Queued task email to %s with link %s', task.assigned_email, link)
+        return True
     except Exception as exc:  # pragma: no cover - log without failing request
         app.logger.warning('Email delivery failed for %s: %s', task.assigned_email, exc)
+        return False
 
 
 def _build_dataframe(tasks: List[Task]) -> pd.DataFrame:
@@ -430,7 +477,9 @@ def admin_dashboard():
     tasks = Task.query.order_by(Task.created_at.desc()).all()
     insights = compute_admin_insights(tasks)
     groups = UserGroup.query.order_by(UserGroup.name.asc()).all()
-    return render_template('admin_dashboard.html', tasks=tasks, insights=insights, groups=groups)
+    email_settings = ensure_email_settings()
+    apply_email_settings(email_settings)
+    return render_template('admin_dashboard.html', tasks=tasks, insights=insights, groups=groups, email_settings=email_settings)
 
 
 @app.route('/admin/create_task', methods=['POST'])
@@ -570,6 +619,94 @@ def create_group():
     return redirect(url_for('admin_dashboard'))
 
 
+@app.route('/admin/email_settings', methods=['POST'])
+@admin_required
+def update_email_settings():
+    settings = ensure_email_settings()
+    form = request.form
+
+    mail_server = form.get('mail_server', '').strip()
+    if not mail_server:
+        flash('SMTP server is required.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    port_raw = form.get('mail_port', '').strip()
+    try:
+        mail_port = int(port_raw or settings.mail_port)
+    except ValueError:
+        flash('SMTP port must be a number.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    use_tls = form.get('mail_use_tls') == 'on'
+    use_ssl = form.get('mail_use_ssl') == 'on'
+    if use_tls and use_ssl:
+        flash('Enable either TLS or SSL, not both.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    settings.mail_server = mail_server
+    settings.mail_port = mail_port
+    settings.use_tls = use_tls
+    settings.use_ssl = use_ssl
+    settings.suppress_send = form.get('mail_suppress_send') == 'on'
+    username = form.get('mail_username', '').strip()
+    settings.username = username or None
+    password = form.get('mail_password', '')
+    if password:
+        settings.password = password
+    default_sender = form.get('mail_default_sender', '').strip()
+    settings.default_sender = default_sender or None
+
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.exception('Failed to update email settings: %s', exc)
+        flash('Unable to update email settings. Please try again.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    apply_email_settings(settings)
+    flash('Email settings updated.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/email_settings/test', methods=['POST'])
+@admin_required
+def test_email_settings():
+    recipient = request.form.get('test_recipient', '').strip()
+    if not recipient:
+        flash('Enter a recipient email address to send the test message.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    settings = ensure_email_settings()
+    apply_email_settings(settings)
+    sender = settings.default_sender or app.config.get('MAIL_DEFAULT_SENDER') or DEFAULT_MAIL_SENDER
+    try:
+        msg = Message(
+            subject='Alerts & Tracker Test Email',
+            recipients=[recipient],
+            body='This is a test email from Alerts & Tracker. If you received this message, SMTP settings are working.',
+            sender=sender,
+        )
+        mail.send(msg)
+    except Exception as exc:
+        app.logger.exception('Failed to send test email: %s', exc)
+        flash(f'Failed to send test email: {exc}', 'danger')
+    else:
+        flash(f'Test email sent to {recipient}.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/tasks/<int:task_id>/email', methods=['POST'])
+@admin_required
+def admin_email_task(task_id: int):
+    task = Task.query.get_or_404(task_id)
+    if send_task_email(task):
+        flash('Email sent to task assignee.', 'success')
+    else:
+        flash('Failed to deliver task email. Check the email settings or logs for details.', 'danger')
+    return redirect(url_for('admin_dashboard'))
+
+
 @app.route('/user/<path:email>', methods=['GET'])
 def user_dashboard(email: str):
     normalized = email.strip().lower()
@@ -647,4 +784,6 @@ def health_check():
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
+        settings = ensure_email_settings()
+        apply_email_settings(settings)
     app.run(debug=True)

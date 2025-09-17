@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from app import Task
+from app import Task, EmailSettings
 
 
 def test_health_check(client):
@@ -144,3 +144,49 @@ def test_user_dashboard_allows_valid_token(client, make_task):
     task = make_task(assigned_email="user@example.com")
     response = client.get(f"/user/user@example.com?token={task.user_token}")
     assert response.status_code == 200
+
+def test_update_email_settings_requires_auth(client):
+    response = client.post('/admin/email_settings', data={'mail_server': 'smtp.example.com'})
+    assert response.status_code == 401
+
+
+def test_update_email_settings_persists(client, admin_headers):
+    response = client.post(
+        '/admin/email_settings',
+        data={
+            'mail_server': 'smtp.example.com',
+            'mail_port': '2525',
+            'mail_use_tls': 'on',
+            'mail_username': 'smtp-user',
+            'mail_password': 'smtp-pass',
+            'mail_default_sender': 'Alerts Bot <alerts@example.com>',
+        },
+        headers=admin_headers,
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    with client.application.app_context():
+        settings = EmailSettings.query.get(1)
+        assert settings.mail_server == 'smtp.example.com'
+        assert settings.mail_port == 2525
+        assert settings.use_tls is True
+        assert settings.use_ssl is False
+        assert settings.username == 'smtp-user'
+        assert settings.password == 'smtp-pass'
+        assert settings.default_sender == 'Alerts Bot <alerts@example.com>'
+
+
+def test_test_email_settings_flow(client, admin_headers):
+    response = client.post(
+        '/admin/email_settings/test',
+        data={'test_recipient': 'user@example.com'},
+        headers=admin_headers,
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+
+
+def test_admin_email_task_sends_link(client, make_task, admin_headers):
+    task = make_task(assigned_email='user@example.com')
+    response = client.post(f'/admin/tasks/{task.id}/email', headers=admin_headers, follow_redirects=False)
+    assert response.status_code == 302

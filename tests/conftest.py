@@ -8,7 +8,7 @@ os.environ.setdefault('SECRET_KEY', 'test-secret')
 os.environ.setdefault('ADMIN_USERNAME', 'admin')
 os.environ.setdefault('ADMIN_PASSWORD', 'password')
 
-from app import app, db, Task, generate_user_token, invalidate_insights_cache  # noqa: E402
+from app import app, db, Task, generate_user_token, invalidate_insights_cache, ensure_email_settings, apply_email_settings  # noqa: E402
 
 
 def _basic_auth_header(username: str, password: str) -> dict:
@@ -30,6 +30,8 @@ def test_app(tmp_path):
         db.session.remove()
         db.drop_all()
         db.create_all()
+        settings = ensure_email_settings()
+        apply_email_settings(settings)
         invalidate_insights_cache()
         yield app
         db.session.remove()

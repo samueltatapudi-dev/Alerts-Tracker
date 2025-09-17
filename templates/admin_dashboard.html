@@ -57,7 +57,8 @@
           </div>
           <div class="mb-3">
             <label for="group_emails" class="form-label">Group Members</label>
-            <textarea class="form-control" id="group_emails" name="group_emails" rows="3" placeholder="alice@example.com\nbob@example.com" required></textarea>
+            <textarea class="form-control" id="group_emails" name="group_emails" rows="3" placeholder="alice@example.com
+bob@example.com" required></textarea>
             <small class="text-muted">Separate emails with commas or new lines.</small>
           </div>
           <button type="submit" class="btn btn-outline-primary w-100">Save Group</button>
@@ -88,8 +89,66 @@
         {% endif %}
       </div>
     </div>
+    <div class="card mt-4">
+      <div class="card-body">
+        <h5 class="card-title">Email Settings</h5>
+        <p class="text-muted small mb-3">Configure the SMTP server used to send task notifications.</p>
+        <form action="{{ url_for('update_email_settings') }}" method="post" class="mb-3">
+          <div class="mb-3">
+            <label class="form-label" for="mail_server">SMTP server</label>
+            <input type="text" class="form-control" id="mail_server" name="mail_server" value="{{ email_settings.mail_server }}" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="mail_port">SMTP port</label>
+            <input type="number" class="form-control" id="mail_port" name="mail_port" value="{{ email_settings.mail_port }}" min="1" required>
+          </div>
+          <div class="row g-2 mb-3">
+            <div class="col-auto">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="mail_use_tls" name="mail_use_tls" {% if email_settings.use_tls %}checked{% endif %}>
+                <label class="form-check-label" for="mail_use_tls">Use TLS</label>
+              </div>
+            </div>
+            <div class="col-auto">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="mail_use_ssl" name="mail_use_ssl" {% if email_settings.use_ssl %}checked{% endif %}>
+                <label class="form-check-label" for="mail_use_ssl">Use SSL</label>
+              </div>
+            </div>
+            <div class="col-auto">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="mail_suppress_send" name="mail_suppress_send" {% if email_settings.suppress_send %}checked{% endif %}>
+                <label class="form-check-label" for="mail_suppress_send">Suppress send</label>
+              </div>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="mail_username">SMTP username</label>
+            <input type="text" class="form-control" id="mail_username" name="mail_username" value="{{ email_settings.username or '' }}" placeholder="Optional">
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="mail_password">SMTP password</label>
+            <input type="password" class="form-control" id="mail_password" name="mail_password" placeholder="{% if email_settings.password %}********{% else %}Optional{% endif %}">
+            <div class="form-text">Leave blank to keep the current password.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="mail_default_sender">Default sender</label>
+            <input type="text" class="form-control" id="mail_default_sender" name="mail_default_sender" value="{{ email_settings.default_sender or '' }}" placeholder="Alerts Bot <alerts@example.com>">
+          </div>
+          <button type="submit" class="btn btn-outline-primary w-100">Save Email Settings</button>
+        </form>
+        <form action="{{ url_for('test_email_settings') }}" method="post">
+          <label class="form-label small" for="test_recipient">Send a test email</label>
+          <div class="input-group">
+            <input type="email" class="form-control" id="test_recipient" name="test_recipient" placeholder="you@example.com" required>
+            <button class="btn btn-outline-secondary" type="submit">Send</button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
-  <div class="col-lg-8">
+
+<div class="col-lg-8">
     <div class="row g-3" id="insightsCards">
       <div class="col-sm-6">
         <div class="card text-bg-light">
@@ -180,7 +239,7 @@
             </tr>
           {% else %}
             <tr>
-              <td colspan="9" class="text-center text-muted">No tasks created yet.</td>
+              <td colspan="10" class="text-center text-muted">No tasks created yet.</td>
             </tr>
           {% endfor %}
         </tbody>

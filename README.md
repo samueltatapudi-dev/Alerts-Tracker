@@ -64,18 +64,21 @@ PREFERRED_URL_SCHEME=https
 
 ## 2. Admin Workflow
 
-1. **Create groups** (left column → _Create User Group_).
+1. **Create groups** (left column "Create User Group").
    - Paste multiple emails (comma, semicolon, or new line separated).
    - Saved groups are listed with member emails and a quick **Use** button.
-2. **Assign tasks** (left column → _Create Task_).
+2. **Assign tasks** (left column "Create Task").
    - Enter a title & description.
    - Add ad-hoc recipients in the textarea **and/or** highlight one or more groups in the multiselect (hold Cmd/Ctrl for multi-select). Click **Clear** to deselect all.
-   - Submit: the app fans out _one task per user_, emails each assignee, and shows the new entries in **Current Tasks**.
+   - Submit: the app fans out one task per user, emails each assignee, and shows the new entries in **Current Tasks**.
 3. **Share user dashboards**.
    - Every task row exposes the personalised URL plus a **Copy Link** button.
 4. **Monitor insights**.
-   - The “Completion Rate”, “Avg Completion Time”, and “AI Insights” cards auto-refresh every 10 seconds.
-   - The “User Engagement Snapshot” sorts users by risk score (logistic regression + heuristics) and flags at-risk users.
+   - The "Completion Rate", "Avg Completion Time", and "AI Insights" cards auto-refresh every 10 seconds.
+   - The "User Engagement Snapshot" sorts users by risk score (logistic regression + heuristics) and flags at-risk users.
+5. **Configure email delivery**.
+   - Use the Email Settings card to update SMTP host, port, TLS/SSL, credentials, and default sender without touching environment variables.
+   - Send a test message to confirm connectivity, then use the **Email Link** button beside any task to resend the user URL on demand.
 
 ## 3. User Experience
 
