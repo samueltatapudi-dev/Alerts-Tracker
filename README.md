@@ -118,29 +118,28 @@ Responses are JSON; all task payloads include `user_url` for direct linking.
 
 Happy hacking!
 
-
 ## 8. Testing
 
-Run the pytest suite to exercise the API endpoints and data helpers. Install pytest once in your virtualenv, then execute it from the project root.
+Run the pytest suite to exercise the API endpoints and data helpers. Install pytest inside your virtualenv, then execute the suite from the project root.
 
-`ash
+```bash
 pip install pytest
 python -m pytest
-`
+```
 
-Tests build an isolated SQLite database inside the instance/ directory and leave the main 	asks.db untouched. Mailing is suppressed automatically.
+Tests build an isolated SQLite database inside the `instance/` directory and leave the main `tasks.db` untouched. Mailing is suppressed automatically.
 
 ## 9. Docker
 
 A container recipe lives in the project root. Build and run it to host the app behind Gunicorn.
 
-`ash
+```bash
 docker build -t alerts-tracker .
 docker run --rm -p 5000:5000 --env-file .env alerts-tracker
-`
+```
 
-Override PORT if you need a different container port, and mount a volume at /app/instance if you want task data to persist between runs.
+Override `PORT` if you need a different container port, and mount a volume at `/app/instance` if you want task data to persist between runs.
 
 ## 10. Continuous Integration
 
-GitHub Actions (.github/workflows/tests.yml) runs python -m pytest on every push and pull request using Python 3.12. Keep the workflow green before merging changes.
+GitHub Actions (`.github/workflows/tests.yml`) runs `python -m pytest` on every push and pull request using Python 3.12. Keep the workflow green before merging changes.
