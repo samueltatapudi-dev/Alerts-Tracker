@@ -1,0 +1,23 @@
+body {
+  background-color: #f5f7fb;
+}
+
+.navbar-brand {
+  font-weight: 600;
+}
+
+.card {
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.05);
+}
+
+.table-hover tbody tr:hover {
+  background-color: rgba(13, 110, 253, 0.08);
+}
+
+.risk-high {
+  background-color: rgba(220, 53, 69, 0.12);
+}
+
+.badge-segment {
+  font-size: 0.75rem;
+}
